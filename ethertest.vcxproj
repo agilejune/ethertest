@@ -22,7 +22,7 @@
     <VCProjectVersion>15.0</VCProjectVersion>
     <ProjectGuid>{1DD0F1F2-4465-46CB-ADE9-72B1F1F586FE}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
-    <RootNamespace>wstest</RootNamespace>
+    <RootNamespace>ethertest</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -164,7 +164,7 @@
   <ItemGroup>
     <ClCompile Include="AbiDecoder.cpp" />
     <ClCompile Include="Keccak.cpp" />
-    <ClCompile Include="wstest.cpp" />
+    <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AbiDecoder.h" />
