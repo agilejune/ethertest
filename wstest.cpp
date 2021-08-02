@@ -253,10 +253,20 @@ class wss_provider_session : public std::enable_shared_from_this<wss_provider_se
             return;
 
         auto input = j["input"].get<std::string>();
+        //auto input = "0x5c11d7950000000000000000000000000000000000000000000000000000000000829f18000000000000000000000000000000000000000000000000000000000066c44300000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000f2d60edb2abba3648965ae8266b121e094c8dfeb000000000000000000000000000000000000000000000000000000006108054a0000000000000000000000000000000000000000000000000000000000000002000000000000000000000000c2132d05d31c914a87c6611c10748aeb04b58e8f0000000000000000000000002791bca1f2de4661ed88a30c99a7a9449aa84174";
         auto decoded = decoder_.decodeMethod(input);
 
-        if (!decoded.empty())
+        if (!decoded.empty()) {
+            std::cout << input << std::endl;
             std::cout << decoded.dump(2) << std::endl;
+
+            auto encoded = decoder_.encodeMethod(decoded["name"].get<std::string>(), decoded["params"]);
+            std::cout << encoded << std::endl;
+
+            if (input != encoded) {
+                std::cout << "Errro" << std::endl;
+            }
+        }
     }
 
     void async_subscribe_pending(rpc_callback callback, subscription_callback on_subscription)

@@ -7,10 +7,37 @@
 
 using namespace nlohmann;
 
+static void decodeParameters(const json& paramDefs, size_t& offset, const std::string& data, json& result);
+static std::string encodeParameters(const json& paramDefs, const json& values);
+
 static std::string to_hexstring(const std::vector<uint8_t>& bytes)
 {
 	std::string s;
 	boost::algorithm::hex_lower(bytes.begin(), bytes.end(), std::back_inserter(s));
+	return s;
+}
+
+template<typename T> std::string to_hexstring(T value)
+{
+	std::ostringstream s;
+	s << std::hex << value;
+	return s.str();
+}
+
+static std::string& pad_hexstring(std::string& s, size_t width)
+{
+	auto len = s.length();
+	if (width > len) {
+		auto padLen = width - len;
+		s.insert(0, padLen, '0');
+	}
+	return s;
+}
+
+static std::string& remove_hexspec(std::string& s)
+{
+	if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+		s.erase(0, 2);
 	return s;
 }
 
@@ -87,6 +114,26 @@ json AbiDecoder::decodeMethod(const std::string& data) const
 	};
 }
 
+std::string AbiDecoder::encodeMethod(const std::string& method, const nlohmann::json& values) const
+{
+	std::string data;
+	json methodAbi{};
+	for (auto& methodID : methodIDs) {
+		auto abi = methodID.second;
+		if (abi["name"].get<std::string>() == method) {
+			methodAbi = abi;
+			data = methodID.first;
+		}
+	}
+
+	if (data.empty())
+		return data;
+
+	data.insert(0, "0x");
+	data.append(encodeParameters(methodAbi["inputs"], values));
+	return data;
+}
+
 static std::string elementaryName(const std::string& name)
 {
 	if (name == "int") {
@@ -123,7 +170,7 @@ static bool isArray(const std::string& name)
 }
 
 // Parse N in type[<N>] where "type" can itself be an array type.
-static void parseTypeArray(const std::string& name, std::string &subArray, size_t &size)
+static bool parseTypeArray(const std::string& name, std::string &subArray, size_t &size)
 {
 	auto start = name.find_last_of('[');
 	auto end = name.find_last_of(']');
@@ -133,7 +180,9 @@ static void parseTypeArray(const std::string& name, std::string &subArray, size_
 		subArray = name.substr(0, start);
 		auto size_str = name.substr(start + 1, end - start - 1);
 		size = size_str.empty() ? 0 : std::stoi(size_str);
+		return true;
 	}
+	return false;
 }
 
 static const char DIGITS[] = "0123456789";
@@ -213,18 +262,19 @@ static json decodeSingle(const std::string& type, const std::string& data, size_
 		}
 		else if (type.substr(0, 6) == "ufixed"
 			|| type.substr(0, 5) == "fixed") {
-			size_t size, sizeM;
-			parseTypeNxM(type, size, sizeM);
+			//size_t size, sizeM;
+			//parseTypeNxM(type, size, sizeM);
+			size_t size = 32;
 			// TODO
 			auto ret = data.substr(offset * 2, size * 2);
-			offset += 32;
+			offset += size;
 			return ret;
 		}
 	}
 	return json{};
 }
 
-void AbiDecoder::decodeParameters(const json& paramDefs, size_t &offset, const std::string& data, json &result) const
+static void decodeParameters(const json& paramDefs, size_t &offset, const std::string& data, json &result)
 {
 	for (auto& paramDef : paramDefs) {
 		auto name = paramDef["name"].get<std::string>();
@@ -232,4 +282,133 @@ void AbiDecoder::decodeParameters(const json& paramDefs, size_t &offset, const s
 
 		result[name] = decodeSingle(type, data, offset);
 	}
+}
+
+static bool isDynamic(const std::string type)
+{
+	std::string subArray;
+	size_t size;
+
+	return type == "string"
+		|| type == "bytes"
+		|| parseTypeArray(type, subArray, size);
+}
+
+static size_t encodeSingle(const std::string& type, const json& value, std::string& data)
+{
+	if (type == "address") {
+		return encodeSingle("uint160", value, data);
+	}
+	else if (type == "bool") {
+		return encodeSingle("uint8", value, data);
+	}
+	else if (type == "string") {
+		return encodeSingle("bytes", value, data);
+	}
+	else if (isArray(type)) {
+		std::string subArray;
+		size_t size;
+
+		parseTypeArray(type, subArray, size);
+
+		if (value.is_array() && size <= value.size()) {
+			size_t dataSize = 0;
+			std::string data2;
+			for (auto& e : value) {
+				dataSize += encodeSingle(subArray, e, data2);
+			}
+
+			if (size == 0) { // dynamic
+				dataSize += encodeSingle("uint256", to_hexstring(value.size()), data);
+			}
+
+			data.append(data2);
+			return dataSize;
+		}
+		else {
+			return 0;
+		}
+	}
+	else if (type == "bytes") {
+		auto bytes = value.get<std::string>();
+		auto len = (bytes.length() + 1) >> 1;
+		remove_hexspec(bytes);
+		pad_hexstring(bytes, len << 1);
+
+		encodeSingle("uint256", to_hexstring(len), data);
+		data.append(bytes);
+		if ((len % 32) != 0) {
+			data.append(32 - (len % 32), '0');
+		}
+		return 32 + len + 32 - (len % 32);
+	}
+	else if (type.substr(0, 5) == "bytes") {
+		auto size = parseTypeN(type);
+		if (size > 0 && size <= 32) {
+			auto bytes = value.get<std::string>();
+			auto len = (bytes.length() + 1) >> 1;
+			remove_hexspec(bytes);
+			pad_hexstring(bytes, len << 1);
+			data.append(bytes);
+			if (len < 32) {
+				data.append(32 - len, '0');
+			}
+		}
+		return 32;
+	}
+	else if (type.substr(0, 4) == "uint"
+		|| type.substr(0, 3) == "int"
+		|| type.substr(0, 6) == "ufixed"
+		|| type.substr(0, 5) == "fixed") {
+
+		auto bytes = value.get<std::string>();
+		auto len = (bytes.length() + 1) >> 1;
+		remove_hexspec(bytes);
+		pad_hexstring(bytes, 32 << 1);
+		data.append(bytes);
+		return 32;
+	}
+	else
+		return 0;
+}
+
+static std::string encodeParameters(const json& paramDefs, const json& values)
+{
+	size_t headerSize = 0;
+	for (auto& paramDef : paramDefs) {
+		auto type = paramDef["type"].get<std::string>();
+		if (isArray(type)) {
+			size_t arraySize = 0;
+			std::string subArray;
+			parseTypeArray(type, subArray, arraySize);
+			if (arraySize == 0) { // dynamic
+				headerSize += 32;
+			}
+			else {
+				headerSize += arraySize * 32;
+			}
+		}
+		else {
+			headerSize += 32;
+		}
+	}
+
+	std::string header, data;
+
+	for (auto& paramDef : paramDefs) {
+		auto name = paramDef["name"].get<std::string>();
+		auto value = values[name];
+		auto type = elementaryName(paramDef["type"].get<std::string>());
+
+		if (isDynamic(type)) {
+			encodeSingle("uint256", to_hexstring(headerSize), header);
+			auto size = encodeSingle(type, value, data);
+			headerSize += size;
+		}
+		else {
+			encodeSingle(type, value, header);
+		}
+	}
+
+	return header + data;
 }
