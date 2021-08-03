@@ -34,6 +34,16 @@ static std::string& pad_hexstring(std::string& s, size_t width)
 	return s;
 }
 
+static std::string& strip_front_zeroes(std::string& s)
+{
+	auto pos = s.find_first_not_of('0');
+	if (pos == std::string::npos)
+		s = "0";
+	else
+		s.erase(0, (pos >> 1) << 1);
+	return s;
+}
+
 static std::string& remove_hexspec(std::string& s)
 {
 	if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
@@ -256,9 +266,12 @@ static json decodeSingle(const std::string& type, const std::string& data, size_
 			|| type.substr(0, 3) == "int") {
 			//auto size = parseTypeN(type);
 			size_t size = 32;
-			auto ret = data.substr(offset * 2, size * 2);
+			auto ret_str = data.substr(offset * 2, size * 2);
 			offset += size;
-			return ret;
+			if (type.substr(0, 5) != "bytes")
+				strip_front_zeroes(ret_str);
+			ret_str.insert(0, "0x");
+			return ret_str;
 		}
 		else if (type.substr(0, 6) == "ufixed"
 			|| type.substr(0, 5) == "fixed") {
@@ -267,7 +280,9 @@ static json decodeSingle(const std::string& type, const std::string& data, size_
 			size_t size = 32;
 			// TODO
 			auto ret = data.substr(offset * 2, size * 2);
+			strip_front_zeroes(ret);
 			offset += size;
+			ret.insert(0, "0x");
 			return ret;
 		}
 	}
@@ -361,8 +376,8 @@ static size_t encodeSingle(const std::string& type, const json& value, std::stri
 		|| type.substr(0, 6) == "ufixed"
 		|| type.substr(0, 5) == "fixed") {
 
-		auto bytes = value.get<std::string>();
-		auto len = (bytes.length() + 1) >> 1;
+		std::string bytes;
+		bytes = value.get<std::string>();
 		remove_hexspec(bytes);
 		pad_hexstring(bytes, 32 << 1);
 		data.append(bytes);

@@ -32,8 +32,8 @@ void Keccak::update(const void* data, size_t size)
             }
         }
         size_t i;
-        for (i = start; p < end && i < byteCount; ++p) {
-            blocks[i >> 2] |= *p << SHIFT[i++ & 3];
+        for (i = start; p < end && i < byteCount; ++p, ++i) {
+            blocks[i >> 2] |= *p << SHIFT[i & 3];
         }
 
         lastByteIndex = i;
