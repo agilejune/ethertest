@@ -377,7 +377,12 @@ static size_t encodeSingle(const std::string& type, const json& value, std::stri
 		|| type.substr(0, 5) == "fixed") {
 
 		std::string bytes;
-		bytes = value.get<std::string>();
+		if (value.is_number_integer())
+			bytes = to_hexstring(value.get<long long>());
+		else if (value.is_number_unsigned())
+			bytes = to_hexstring(value.get<unsigned long long>());
+		else if (value.is_string())
+			bytes = value.get<std::string>();
 		remove_hexspec(bytes);
 		pad_hexstring(bytes, 32 << 1);
 		data.append(bytes);

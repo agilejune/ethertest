@@ -1,6 +1,5 @@
 /.vs
 /boost
-/nlohmann
 /ethertest
 /x64
 /wstest.vcxproj.user

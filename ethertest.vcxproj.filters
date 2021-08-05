@@ -24,12 +24,21 @@
     <ClCompile Include="AbiDecoder.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="http_client.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="secp256k1\src\secp256k1.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Keccak.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="AbiDecoder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="http_client.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
