@@ -379,6 +379,14 @@ class my_session : public wss_provider_session
     AbiDecoder decoder_;
     secp256k1_context* secp256k1_ctx_;
 
+    unsigned int chain_id_ = 0;
+    unsigned int next_nonce_ = 0;
+
+    bool wallet_initialized_ = false;
+
+    static constexpr const char* privkey = "0x733e114e7e9bd9e63afaed959001c95d6909cd23736b32e8b05f68a0a5d76dac";
+    static constexpr const char* wallet_address = "0xf942BF34eE2aca7a5017190eCa83C50171b0122B";
+
     void on_initialized()
     {
         init_decoder();
@@ -402,18 +410,45 @@ class my_session : public wss_provider_session
         auto abi_json = json::parse(abi);
         decoder_.addABI(abi_json);
 
+        init_swap();
+
         test_swap();
     }
 
+    void init_swap()
+    {
+        async_get_chain_id([=](const json& r, const json& e) {
+            chain_id_ = std::stoul(r.get<std::string>(), nullptr, 16);
+            std::cout << "chain_id: " << chain_id_ << std::endl;
+
+            async_get_transaction_count(wallet_address, "pending", [=](const json& r, const json& e) {
+                next_nonce_ = std::stoul(r.get<std::string>(), nullptr, 16);
+                std::cout << "nonce: " << next_nonce_ << std::endl;
+
+                wallet_initialized_ = true;
+
+                on_init_wallet();
+                });
+            });
+    }
+
+    void on_init_wallet()
+    {
+        test_swap(); // NOTE: if you don't want to swap on initialization, remove this.
+    }
+
+
     void test_swap()
     {
-        static const char* privkey = "0x733e114e7e9bd9e63afaed959001c95d6909cd23736b32e8b05f68a0a5d76dac";
+        if (!wallet_initialized_)
+            return;
+
         static const char* contract = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
-        static const char* wallet_address = "0xf942BF34eE2aca7a5017190eCa83C50171b0122B";
         static const char* token_a = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
         static const char* token_b = "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6";
 
         async_contract_method_call(
+            chain_id_,
             contract,
             wallet_address, privkey,
 
@@ -435,73 +470,64 @@ class my_session : public wss_provider_session
                     std::cout << e.dump(2) << std::endl;
                     return;
                 }
+
                 std::cout << "tx hash: " << r.get<std::string>() << std::endl;
             }
         );
     }
 
-    void async_contract_method_call(const std::string &contract, const std::string &address, const std::string &privkey, const std::string &method, const json &method_args, const json &overrides, rpc_callback callback)
+    void async_contract_method_call(unsigned int chain_id, const std::string &contract, const std::string &address, const std::string &privkey, const std::string &method, const json &method_args, const json &overrides, rpc_callback callback)
     {
-        async_get_chain_id([=](const json& r, const json& e) {
-            auto chain_id = std::stoul(r.get<std::string>(), nullptr, 16);
-            std::cout << "chain_id: " << chain_id << std::endl;
+        // 1. encode data
+        auto data = decoder_.encodeMethod(method, method_args);
+        std::cout << "method: " << method << ", encoded data : " << data << std::endl;
 
-            async_get_transaction_count(address, "pending", [=](const json& r, const json& e) {
-                auto tx_count = std::stoul(r.get<std::string>(), nullptr, 16);
-                std::cout << "tx_count(nonce): " << tx_count << std::endl;
+        // 2. make tx
+        json tx{
+            { "data", data },
+            { "nonce", to_hexstring(next_nonce_) },
+            { "to", contract },
+        };
+        tx.update(overrides);
 
-                // 1. encode data
-                auto data = decoder_.encodeMethod(method, method_args);
-                std::cout << "method: " << method << ", encoded data : " << data << std::endl;
+        std::cout << "tx:" << std::endl
+            << tx.dump(2) << std::endl;
 
-                // 2. make tx
-                json tx{
-                    { "data", data },
-                    { "nonce", to_hexstring(tx_count) },
-                    { "to", contract },
-                };
-                tx.update(overrides);
+        // 3. tx RLP encode
+        std::vector<uint8_t> tx_data_unsigned;
+        serialize_tx(tx_data_unsigned, tx, to_hexstring(chain_id), "", "");
+        std::cout << "tx_rlp: " << to_hexstring(tx_data_unsigned) << std::endl;
 
-                std::cout << "tx:" << std::endl
-                    << tx.dump(2) << std::endl;
+        // 4. tx digest
+        Keccak keccak(256);
+        keccak.update(tx_data_unsigned.data(), tx_data_unsigned.size());
+        auto tx_data_unsigned_hash = keccak.finalize();
+        std::cout << "tx_digest: " << to_hexstring(tx_data_unsigned_hash) << std::endl;
 
-                // 3. tx RLP encode
-                std::vector<uint8_t> tx_data_unsigned;
-                serialize_tx(tx_data_unsigned, tx, to_hexstring(chain_id), "", "");
-                std::cout << "tx_rlp: " << to_hexstring(tx_data_unsigned) << std::endl;
+        // 5. sign tx digest
+        secp256k1_ecdsa_recoverable_signature sig;
+        secp256k1_ecdsa_sign_recoverable(secp256k1_ctx_, &sig, tx_data_unsigned_hash.data(), arrayify(privkey).data(), nullptr, nullptr);
 
-                // 4. tx digest
-                Keccak keccak(256);
-                keccak.update(tx_data_unsigned.data(), tx_data_unsigned.size());
-                auto tx_data_unsigned_hash = keccak.finalize();
-                std::cout << "tx_digest: " << to_hexstring(tx_data_unsigned_hash) << std::endl;
+        uint8_t sigdata[64];
+        int recid;
+        secp256k1_ecdsa_recoverable_signature_serialize_compact(secp256k1_ctx_, sigdata, &recid, &sig);
+        std::string sig_r = to_hexstring(sigdata, 32);
+        std::string sig_s = to_hexstring(sigdata+32, 32);
 
-                // 5. sign tx digest
-                secp256k1_ecdsa_recoverable_signature sig;
-                secp256k1_ecdsa_sign_recoverable(secp256k1_ctx_, &sig, tx_data_unsigned_hash.data(), arrayify(privkey).data(), nullptr, nullptr);
+        std::cout << "sig: " << std::endl
+            << "v:" << recid << std::endl
+            << "r:" << sig_r << std::endl
+            << "s:" << sig_s << std::endl
+            ;
 
-                uint8_t sigdata[64];
-                int recid;
-                secp256k1_ecdsa_recoverable_signature_serialize_compact(secp256k1_ctx_, sigdata, &recid, &sig);
-                std::string sig_r = to_hexstring(sigdata, 32);
-                std::string sig_s = to_hexstring(sigdata+32, 32);
+        // 6. re-encode tx with signature
+        std::vector<uint8_t> tx_data_signed;
+        serialize_tx(tx_data_signed, tx, to_hexstring(27 + (unsigned)recid + chain_id * 2 + 8), sig_r, sig_s);
+        auto tx_signed = to_hexstring(tx_data_signed);
+        std::cout << "signed_tx: " << tx_signed << std::endl;
 
-                std::cout << "sig: " << std::endl
-                    << "v:" << recid << std::endl
-                    << "r:" << sig_r << std::endl
-                    << "s:" << sig_s << std::endl
-                    ;
-
-                // 6. re-encode tx with signature
-                std::vector<uint8_t> tx_data_signed;
-                serialize_tx(tx_data_signed, tx, to_hexstring(27 + (unsigned)recid + chain_id * 2 + 8), sig_r, sig_s);
-                auto tx_signed = to_hexstring(tx_data_signed);
-                std::cout << "signed_tx: " << tx_signed << std::endl;
-
-                // 7. send to rpc
-                async_send_raw_transaction(tx_signed, callback);
-                });
-            });
+        // 7. send to rpc
+        async_send_raw_transaction(tx_signed, callback);
     }
 
     static void serialize_tx(std::vector<uint8_t>& payload, const json& tx, const std::string& v, const std::string& r, const std::string& s)
@@ -571,6 +597,8 @@ class my_session : public wss_provider_session
         auto decoded = decoder_.decodeMethod(input);
 
         if (!decoded.empty()) {
+            //test_swap();
+
             std::cout << input << std::endl;
             std::cout << decoded.dump(2) << std::endl;
 
@@ -604,14 +632,13 @@ class my_session : public wss_provider_session
         rpc_call("eth_getTransactionCount", { boost::algorithm::to_lower_copy(address), block_tag }, callback);
     }
 
-    void async_send_transaction(const json& tx, rpc_callback callback)
-    {
-        rpc_call("eth_sendTransaction", { tx }, callback);
-    }
-
     void async_send_raw_transaction(const std::string& signed_tx, rpc_callback callback)
     {
-        rpc_call("eth_sendRawTransaction", { signed_tx }, callback);
+        rpc_call("eth_sendRawTransaction", { signed_tx }, [=](const json& r, const json& e) {
+            if (e.is_null())
+                ++next_nonce_;
+            callback(r, e);
+            });
     }
 
 public:
