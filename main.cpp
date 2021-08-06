@@ -374,6 +374,9 @@ static std::vector<uint8_t> arrayify(uint64_t value)
     return arrayify(to_hexstring(value));
 }
 
+static const char* privkey = "0x733e114e7e9bd9e63afaed959001c95d6909cd23736b32e8b05f68a0a5d76dac";
+static const char* wallet_address = "0xf942BF34eE2aca7a5017190eCa83C50171b0122B";
+
 class my_session : public wss_provider_session
 {
     AbiDecoder decoder_;
@@ -383,9 +386,6 @@ class my_session : public wss_provider_session
     unsigned int next_nonce_ = 0;
 
     bool wallet_initialized_ = false;
-
-    static constexpr const char* privkey = "0x733e114e7e9bd9e63afaed959001c95d6909cd23736b32e8b05f68a0a5d76dac";
-    static constexpr const char* wallet_address = "0xf942BF34eE2aca7a5017190eCa83C50171b0122B";
 
     void on_initialized()
     {
@@ -447,6 +447,8 @@ class my_session : public wss_provider_session
         static const char* token_a = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
         static const char* token_b = "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6";
 
+        auto start_time = std::chrono::system_clock::now();
+
         async_contract_method_call(
             chain_id_,
             contract,
@@ -470,6 +472,11 @@ class my_session : public wss_provider_session
                     std::cout << e.dump(2) << std::endl;
                     return;
                 }
+
+                auto duration = std::chrono::system_clock::now() - start_time;
+                std::cout << "test_swap elapsed: "
+                    << std::chrono::duration_cast<std::chrono::milliseconds>(duration).count()
+                    << " msecs" << std::endl;
 
                 std::cout << "tx hash: " << r.get<std::string>() << std::endl;
             }
