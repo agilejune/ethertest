@@ -8,6 +8,7 @@
 using namespace nlohmann;
 
 static void decodeParameters(const json& paramDefs, size_t& offset, const std::string& data, json& result);
+static void decodeParameterArray(const json& paramDefs, size_t& offset, const std::string& data, json& result);
 static std::string encodeParameters(const json& paramDefs, const json& values);
 
 static std::string to_hexstring(const std::vector<uint8_t>& bytes)
@@ -85,62 +86,85 @@ void AbiDecoder::addABI(const json& abiArray)
 	for (auto& abi : abiArray) {
 		auto name_it = abi.find("name");
 		if (name_it != abi.end()) {
-			auto inputs = abi["inputs"];
-			auto method = name_it.value().get<std::string>() +
-				type_array_string(abi["inputs"]);
-			auto signature = sha3(method);
+			auto method_name = name_it.value().get<std::string>();
+			method_name_to_abi_map_[method_name] = abi;
 
+			auto method_signature = method_name + type_array_string(abi["inputs"]);
+			auto method_id = sha3(method_signature);
 			if (abi["type"].get<std::string>() == "event") {
-				methodIDs[signature] = abi;
+				method_id_to_name_map_[method_id] = method_name;
 			}
 			else {
-				methodIDs[signature.substr(0, 8)] = abi;
+				method_id_to_name_map_[method_id.substr(0, 8)] = method_name;
 			}
 		}
 	}
 }
 
-json AbiDecoder::decodeMethod(const std::string& data) const
+json AbiDecoder::decodeData(const std::string& data) const
 {
-	auto methodID = data.substr(2, 8);
-	auto abiItemIt = methodIDs.find(methodID);
-	if (abiItemIt == methodIDs.end())
+	auto data_normalized = data;
+	remove_hexspec(data_normalized);
+
+	auto method_id = data.substr(0, 8);
+	auto method_name_it = method_id_to_name_map_.find(method_id);
+	if (method_name_it == method_id_to_name_map_.end())
 		return json{};
 
-	auto &abiItem = abiItemIt->second;
+	auto& method_name = method_name_it->second;
+	return decodeInput(method_name, data.substr(8));
+}
 
-	//std::cout << abiItem << std::endl;
+json AbiDecoder::decodeInput(const std::string& method, const std::string& data) const
+{
+	auto& abi = method_name_to_abi_map_.at(method);
 
-	auto methodName = abiItem["name"].get<std::string>();
+	auto data_normalized = data;
+	remove_hexspec(data_normalized);
 
-	auto paramsData = data.substr(10);
 	json params;
 	size_t offset = 0;
-	decodeParameters(abiItem["inputs"], offset, paramsData, params);
+	decodeParameters(abi["inputs"], offset, data_normalized, params);
 
 	return json{
-		{ "name", abiItem["name"].get<std::string>() },
+		{ "name", method },
 		{ "params", params },
 	};
 }
 
-std::string AbiDecoder::encodeMethod(const std::string& method, const nlohmann::json& values) const
+json AbiDecoder::decodeOutput(const std::string& method, const std::string& data) const
+{
+	auto abi_it = method_name_to_abi_map_.find(method);
+	if (abi_it == method_name_to_abi_map_.end())
+		return json{};
+
+	auto& abi = abi_it->second;
+
+	auto data_normalized = data;
+	remove_hexspec(data_normalized);
+
+	json params = json::array();
+	size_t offset = 0;
+	decodeParameterArray(abi["outputs"], offset, data_normalized, params);
+	return params;
+}
+
+std::string AbiDecoder::encodeInput(const std::string& method, const nlohmann::json& values) const
 {
 	std::string data;
-	json methodAbi{};
-	for (auto& methodID : methodIDs) {
-		auto abi = methodID.second;
-		if (abi["name"].get<std::string>() == method) {
-			methodAbi = abi;
-			data = methodID.first;
+	for (auto& method_id_name_it : method_id_to_name_map_) {
+		if (method_id_name_it.second == method) {
+			data = method_id_name_it.first;
+			break;
 		}
 	}
 
 	if (data.empty())
 		return data;
 
+	auto &abi = method_name_to_abi_map_.at(method);
 	data.insert(0, "0x");
-	data.append(encodeParameters(methodAbi["inputs"], values));
+	data.append(encodeParameters(abi["inputs"], values));
 	return data;
 }
 
@@ -296,6 +320,14 @@ static void decodeParameters(const json& paramDefs, size_t &offset, const std::s
 		auto type = elementaryName(paramDef["type"].get<std::string>());
 
 		result[name] = decodeSingle(type, data, offset);
+	}
+}
+
+static void decodeParameterArray(const json& paramDefs, size_t& offset, const std::string& data, json& result)
+{
+	for (auto& paramDef : paramDefs) {
+		auto type = elementaryName(paramDef["type"].get<std::string>());
+		result.push_back(decodeSingle(type, data, offset));
 	}
 }
 
